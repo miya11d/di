@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Taman Sentuh — Game Sederhana</title>
+  <style>
+    :root{ --bg:#071422; --accent:#4EE2C7; --soft:#A9F0E0; --danger:#FF6B6B }
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,'Helvetica Neue',Arial}
+    body{display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,#071422 0%, #0b2a3b 100%);color:#fff}
+    .game-wrap{width:100%;max-width:480px;height:85vh;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:18px;box-shadow:0 8px 30px rgba(2,6,23,0.7);overflow:hidden;position:relative}
+    canvas{display:block;width:100%;height:100%}
+    .hud{position:absolute;left:12px;top:12px;z-index:10;display:flex;gap:8px;align-items:center}
+    .badge{background:rgba(255,255,255,0.04);backdrop-filter:blur(4px);padding:8px 10px;border-radius:999px;font-weight:600}
+    .big-center{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:20;text-align:center;pointer-events:none}
+    .btn{position:absolute;right:12px;top:12px;background:var(--accent);color:#012;padding:8px 12px;border-radius:999px;font-weight:700;border:none}
+    .controls{position:absolute;right:12px;bottom:12px;left:12px;z-index:20;display:flex;justify-content:center;gap:8px}
+    .hint{background:rgba(0,0,0,0.35);padding:8px 12px;border-radius:12px}
+    .footer{position:absolute;left:12px;bottom:12px;font-size:12px;opacity:0.85}
+    /* mobile affordance ring */
+    .touch-ring{position:absolute;z-index:15;border-radius:50%;pointer-events:none;opacity:0;transform:translate(-50%,-50%);width:64px;height:64px;border:2px solid rgba(78,226,199,0.18);box-shadow:0 6px 18px rgba(78,226,199,0.06)}
+  </style>
+</head>
+<body>
+  <div class="game-wrap" id="gameWrap">
+    <canvas id="gameCanvas"></canvas>
+    <div class="hud">
+      <div class="badge" id="score">Skor: 0</div>
+      <div class="badge" id="level">Level: 1</div>
+    </div>
+    <button class="btn" id="pauseBtn">PAUSE</button>
+    <div class="big-center" id="centerMsg"></div>
+    <div class="controls">
+      <div class="hint">Kontrol: Ketuk=Loncat singkat • Usap Kiri/Kanan=Geser cepat • Tekan & Tahan=Lompatan Charged</div>
+    </div>
+    <div class="footer">Taman Sentuh — Game kecil untuk HP</div>
+    <div class="touch-ring" id="touchRing"></div>
+  </div>
+  <script>
+  /*
+    Taman Sentuh (Touch Garden)
+    - Single HTML file: canvas + JS
+    - Mobile-first controls: tap, swipe, long-press
+    - Objective: Kumpulkan tetes hujan untuk menumbuhkan taman. Hindari duri.
+  */
+
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const wrap = document.getElementById('gameWrap');
+  const scoreEl = document.getElementById('score');
+  const levelEl = document.getElementById('level');
+  const centerMsg = document.getElementById('centerMsg');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const touchRing = document.getElementById('touchRing');
+
+  let W, H, DPR = window.devicePixelRatio || 1;
+  function resize(){
+    W = wrap.clientWidth; H = wrap.clientHeight;
+    canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+    canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // simple utility
+  const rand = (a,b)=>Math.random()*(b-a)+a;
+  
+  // Game state
+  const state = {
+    running:true,
+    score:0,
+    level:1,
+    time:0,
+    drops:[],
+    spikes:[],
+    player:null
+  }
+
+  // Player
+  class Player{
+    constructor(){
+      this.r = 22; this.x = W*0.2; this.y = H - 80; this.vx=0; this.vy=0; this.onGround=true; this.charge=0; this.maxCharge=1.6; this.color='#4EE2C7';
+    }
+    update(dt){
+      this.vy += 1600*dt; // gravity
+      this.x += this.vx*dt;
+      this.y += this.vy*dt;
+      // floor
+      const floor = H - 48;
+      if(this.y + this.r > floor){ this.y = floor - this.r; this.vy = 0; this.onGround = true; }
+      // friction
+      this.vx *= 0.92;
+      // clamp x
+      if(this.x < this.r) this.x = this.r, this.vx=0;
+      if(this.x > W - this.r) this.x = W - this.r, this.vx=0;
+    }
+    draw(){
+      // glow circle
+      const g = ctx.createRadialGradient(this.x, this.y, this.r*0.2, this.x, this.y, this.r*3);
+      g.addColorStop(0, 'rgba(78,226,199,0.18)');
+      g.addColorStop(1, 'rgba(78,226,199,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(this.x,this.y,this.r*2.2,0,Math.PI*2); ctx.fill();
+      // body
+      ctx.fillStyle = this.color; ctx.beginPath(); ctx.arc(this.x,this.y,this.r,0,Math.PI*2); ctx.fill();
+      // eyes
+      ctx.fillStyle='#012'; ctx.beginPath(); ctx.arc(this.x-7,this.y-4,3,0,Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(this.x-1,this.y-6,2.2,0,Math.PI*2); ctx.fill();
+      // charge ring
+      if(this.charge>0){
+        ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+        ctx.beginPath(); ctx.arc(this.x,this.y,this.r+10, -Math.PI/2, -Math.PI/2 + (this.charge/this.maxCharge)*Math.PI*2 ); ctx.stroke();
+      }
+    }
+  }
+
+  function spawnDrop(){
+    const d = {x: rand(40,W-40), y:-20, r:10, vy: rand(80,200), value:1+Math.floor(state.level/3)};
+    state.drops.push(d);
+  }
+  function spawnSpike(){
+    const s = {x: rand(140, W-40), y: H-56, w:36, h:36};
+    state.spikes.push(s);
+    // cleanup old spikes
+    if(state.spikes.length>6) state.spikes.shift();
+  }
+
+  function resetGame(){
+    state.score=0; state.level=1; state.drops=[]; state.spikes=[]; state.time=0; state.player = new Player(); centerMsg.innerHTML='SENTUH UNTUK MULAI'; centerMsg.style.opacity=1;
+  }
+  resetGame();
+
+  // touch gesture handling
+  let touchStartTime=0, touchStartPos=null, longPressTimer=null, isHolding=false;
+  const longPressThreshold=420; // ms
+  const swipeThreshold=30; // px
+
+  function showTouchRing(x,y){ touchRing.style.left = x+'px'; touchRing.style.top = y+'px'; touchRing.style.opacity=1; touchRing.style.transform='translate(-50%,-50%) scale(1)';
+    clearTimeout(touchRing._t); touchRing._t = setTimeout(()=> touchRing.style.opacity=0, 350);
+  }
+
+  wrap.addEventListener('touchstart', e=>{
+    e.preventDefault();
+    const t = e.touches[0];
+    touchStartTime = performance.now(); touchStartPos = {x:t.clientX, y:t.clientY};
+    showTouchRing(t.clientX - wrap.getBoundingClientRect().left, t.clientY - wrap.getBoundingClientRect().top);
+    longPressTimer = setTimeout(()=>{
+      isHolding = true; state.player.charge = 0.02; // start charging
+    }, longPressThreshold);
+  }, {passive:false});
+
+  wrap.addEventListener('touchmove', e=>{
+    e.preventDefault();
+    // if holding, increase charge
+    if(isHolding){ state.player.charge += 0.02; if(state.player.charge>state.player.maxCharge) state.player.charge = state.player.maxCharge; }
+  }, {passive:false});
+
+  wrap.addEventListener('touchend', e=>{
+    e.preventDefault();
+    clearTimeout(longPressTimer);
+    const dt = performance.now() - touchStartTime;
+    const end = (e.changedTouches && e.changedTouches[0]) || {}; // fallback
+    const endPos = {x: end.clientX || touchStartPos.x, y: end.clientY || touchStartPos.y};
+    const dx = endPos.x - touchStartPos.x; const dy = endPos.y - touchStartPos.y;
+    // if was holding => charged jump
+    if(isHolding){
+      const power = Math.max(360, 360 + state.player.charge* -800);
+      state.player.vy = -power * 0.8; state.player.onGround=false; state.player.charge=0; isHolding=false; 
+      // small forward boost
+      state.player.vx += dx*0.02;
+      return;
+    }
+    // swipe detection
+    if(Math.abs(dx) > swipeThreshold && Math.abs(dx) > Math.abs(dy)){
+      // horizontal swipe
+      const dir = dx>0 ? 1 : -1;
+      // dash
+      state.player.vx += dir * 420;
+      // small shyup
+      state.player.vy = Math.max(state.player.vy - 80, -420);
+      return;
+    }
+    // tap => short jump
+    if(dt < 400 && Math.hypot(dx,dy) < 20){
+      if(state.player.onGround){ state.player.vy = -520; state.player.onGround=false; }
+      return;
+    }
+  }, {passive:false});
+
+  // pause
+  pauseBtn.addEventListener('click', ()=>{
+    state.running = !state.running; pauseBtn.innerText = state.running ? 'PAUSE' : 'RESUME'; if(state.running) requestAnimationFrame(loop);
+  });
+
+  // main loop
+  let last = performance.now();
+  function loop(now){
+    if(!state.running) return; const dt = Math.min(0.033, (now - last)/1000); last = now; state.time += dt;
+    // spawn drops
+    if(Math.random() < 0.02 + state.level*0.002) spawnDrop();
+    // spawn hazards occasionally
+    if(Math.random() < 0.006 + state.level*0.001) spawnSpike();
+    // update drops
+    for(let i=state.drops.length-1;i>=0;i--){
+      const d = state.drops[i]; d.y += d.vy*dt; d.vy += 10*dt; if(d.y > H+40) state.drops.splice(i,1);
+      // collision with player
+      const dx = d.x - state.player.x, dy = d.y - state.player.y; const dist = Math.hypot(dx,dy);
+      if(dist < d.r + state.player.r - 6){ state.score += d.value; state.drops.splice(i,1); 
+        // small level up
+        if(state.score % 12 === 0){ state.level++; centerMsg.innerHTML='LEVEL '+state.level; centerMsg.style.opacity=1; setTimeout(()=>centerMsg.style.opacity=0,900); }
+      }
+    }
+    // update spikes collision
+    for(let i=state.spikes.length-1;i>=0;i--){
+      const s = state.spikes[i]; // simple AABB vs circle
+      const closestX = Math.max(s.x - s.w/2, Math.min(state.player.x, s.x + s.w/2));
+      const closestY = Math.max(s.y - s.h, Math.min(state.player.y, s.y));
+      const dx = closestX - state.player.x; const dy = closestY - state.player.y;
+      if(dx*dx + dy*dy < state.player.r*state.player.r){
+        // hit!
+        state.score = Math.max(0, state.score - 5); state.player.vy = -420; state.player.vx = -state.player.vx*0.6; // knockback
+        // flash message
+        centerMsg.innerHTML='OUCH!'; centerMsg.style.opacity=1; setTimeout(()=>centerMsg.style.opacity=0,700);
+        state.spikes.splice(i,1);
+      }
+    }
+
+    // update player
+    state.player.update(dt);
+    // gradual slowdown of time to keep gameplay snappy
+    if(state.player.x > W*0.6){ state.player.x = Math.min(state.player.x, W*0.9); }
+
+    // draw background
+    ctx.fillStyle = 'linear-gradient(0deg,#071422,#063240)'; ctx.fillStyle = '#072233'; ctx.fillRect(0,0,W,H);
+    // decorative ground
+    ctx.fillStyle = '#07363f'; ctx.fillRect(0, H-56, W, 56);
+    // draw grass tiles
+    for(let gx=0; gx<W; gx+=48){
+      ctx.fillStyle = 'rgba(78,226,199,0.04)'; ctx.fillRect(gx, H-56, 36, 8);
+    }
+
+    // draw drops
+    for(const d of state.drops){
+      ctx.beginPath();
+      const gradient = ctx.createLinearGradient(d.x, d.y-10, d.x, d.y+12);
+      gradient.addColorStop(0, 'rgba(173,246,237,0.95)'); gradient.addColorStop(1, 'rgba(78,226,199,0.9)');
+      ctx.fillStyle = gradient; ctx.ellipse(d.x, d.y, d.r*0.7, d.r, 0, 0, Math.PI*2); ctx.fill();
+      // sparkle
+      ctx.fillStyle='rgba(255,255,255,0.4)'; ctx.beginPath(); ctx.arc(d.x-4, d.y-6, 2,0,Math.PI*2); ctx.fill();
+    }
+
+    // draw spikes
+    for(const s of state.spikes){
+      ctx.save(); ctx.translate(s.x, s.y);
+      ctx.fillStyle = 'rgba(255,107,107,0.12)'; ctx.beginPath(); ctx.moveTo(0,-s.h); ctx.lineTo(s.w/2,0); ctx.lineTo(-s.w/2,0); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#FF6B6B'; ctx.beginPath(); ctx.moveTo(0,-s.h); ctx.lineTo(s.w/2,0); ctx.lineTo(-s.w/2,0); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+
+    // draw player
+    state.player.draw();
+
+    // HUD update
+    scoreEl.innerText = 'Skor: '+state.score;
+    levelEl.innerText = 'Level: '+state.level;
+
+    // subtle automatic difficulty increase
+    if(state.time > 8){ state.level = 1 + Math.floor(state.time/10); }
+
+    requestAnimationFrame(loop);
+  }
+
+  // start
+  state.player = new Player();
+  centerMsg.style.opacity=1; setTimeout(()=>centerMsg.style.opacity=0,1400);
+  requestAnimationFrame(loop);
+
+  // quick tutorial overlay when first touch
+  let firstTouchSeen = false;
+  wrap.addEventListener('touchstart', ()=>{ if(!firstTouchSeen){ firstTouchSeen=true; centerMsg.innerHTML='Selamat! Gunakan kontrol untuk kumpulkan tetes & tumbuhkan taman.'; centerMsg.style.opacity=1; setTimeout(()=>centerMsg.style.opacity=0,1600); } });
+
+  // make initial spawn so player can collect
+  for(let i=0;i<4;i++){ spawnDrop(); }
+
+  // encourage small visual feedback for touches inside container
+  wrap.addEventListener('touchstart', function(e){
+    const t = e.touches[0]; const rect = wrap.getBoundingClientRect();
+    showTouchRing(t.clientX - rect.left, t.clientY - rect.top);
+  }, {passive:false});
+
+  // add small accelerometer optional: tilt to move a bit (if permission allowed)
+  if('DeviceMotionEvent' in window){
+    window.addEventListener('devicemotion', ev=>{
+      const g = ev.accelerationIncludingGravity;
+      if(g && Math.abs(g.x) > 0.2){ state.player.vx += g.x*6; }
+    });
+  }
+
+  </script>
+</body>
+</html>
